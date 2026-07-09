@@ -193,12 +193,22 @@ def _search_rows(
     if query:
         _ensure_fts_index(table, table_name)
         search = table.search(query, query_type="fts").limit(limit)
+        if filters.where:
+            search = search.where(filters.where, prefilter=True)
+        rows = search.to_list()
+        return _post_filter(rows, filters)
     else:
-        search = table.search().limit(limit)
-    if filters.where:
-        search = search.where(filters.where, prefilter=True)
-    rows = search.to_list()
-    return _post_filter(rows, filters)
+        # No FTS query text: `.limit(N)` on a plain `.search()` caps the raw table
+        # scan BEFORE `.where()` filters run, not after. Scan broadly first, apply
+        # filters, then truncate to the requested limit — otherwise most true
+        # matches get silently dropped when they're outside the first N physical
+        # rows of the table.
+        search = table.search().limit(200_000)
+        if filters.where:
+            search = search.where(filters.where, prefilter=True)
+        rows = search.to_list()
+        rows = _post_filter(rows, filters)
+        return rows[:limit]
 
 
 def _print_rows(rows: list[dict], args: argparse.Namespace) -> None:
