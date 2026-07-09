@@ -55,6 +55,12 @@ just bootstrap
 source .venv/bin/activate
 ```
 
+**Windows:** this isn't an officially supported/CI-tested platform (releases and CI are
+macOS/Linux only), but it does work, including without admin rights and without WSL2/Docker. See
+[`docs/windows.md`](docs/windows.md) — the short version is a GNU-target Rust toolchain (avoids
+needing Visual Studio) plus a plain `venv`/`pip` install (no `uv` needed, all deps have Windows
+wheels).
+
 ### Option 1: Run pipeline locally
 
 This is the simplest way to get started, but it will be slow without a large GPU. For a 15GB mailbox (about 200k messages) it will take **about 25 hours** on a Macbook Air M3.
@@ -255,6 +261,7 @@ You can keep everything local with a combination of OpenCode and vLLM/Ollama run
 - Release process: [`docs/release.md`](docs/release.md)
 - Usage examples: [`docs/examples.md`](docs/examples.md)
 - Prompt details: [`docs/prompts.md`](docs/prompts.md)
+- Windows (no admin rights) setup: [`docs/windows.md`](docs/windows.md)
 
 ## MIT License
 

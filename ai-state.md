@@ -54,6 +54,16 @@ Purpose: compact AI handoff. Update whenever CLI contracts, stage ownership, wor
 - Boolean bridge flags: Click-style booleans must be passed as flags (`--resume`/`--no-resume`) and never as extra positional values (`--resume true|false`).
 - Rust bridge runner now streams child stdout/stderr incrementally, parses event JSON live, updates stage UI, and logs bridge lines to `logs/<stage>.log`.
 
+## Dependency constraints
+- `lancedb` is pinned to `==0.30.0` in `python/pyproject.toml`, not left as a floor. Versions
+  after ~0.30.x removed the `use_tantivy=True` multi-column FTS API in favor of native FTS
+  (single column per index only), which conflicts with this repo's one-combined-index-across-
+  multiple-columns schema (`repository.py`'s `FTS_COLUMNS`). Do not loosen this constraint
+  without also redesigning FTS index creation/query to per-column native indices — that's a real
+  architecture change, not a version bump. See `docs/windows.md` for the full writeup.
+- `python/lib/ragmail/storage/repository.py` still expects `use_tantivy=True` to be a valid
+  kwarg on `Table.create_fts_index` — this is only true for the pinned lancedb version above.
+
 ## Workspace layout (stable)
 `workspaces/<name>/`
 - `inputs/`
@@ -139,3 +149,12 @@ Purpose: compact AI handoff. Update whenever CLI contracts, stage ownership, wor
   - `cargo test -p ragmail-cli` -> pass
   - `cargo clippy -p ragmail-cli -- -D warnings` -> pass
   - `.venv/bin/python -m pytest python/tests/test_python_bridge_contracts.py python/tests/test_rust_pipeline_bridge.py` -> pass
+- Windows, no admin rights, no WSL2/Docker (manual verification, not via `just`/CI — see
+  `docs/windows.md`):
+  - `cargo build --release` (GNU target) against unmodified `rust/` -> pass, no source changes
+    needed
+  - `pip install -e python` into a plain `venv` -> pass, all deps resolve to prebuilt wheels
+  - Full pipeline (`split,preprocess,vectorize,ingest`) against a real ~9k-message mbox slice ->
+    pass, 7,458 emails ingested
+  - FTS + query against the ingested DB -> pass, after pinning `lancedb==0.30.0` (see
+    "Dependency constraints" above) and rebuilding the FTS index

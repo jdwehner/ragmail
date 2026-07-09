@@ -59,6 +59,10 @@ Implementation detail:
 - Python bootstrap logic is in `just.d/scripts/bootstrap-python.sh`.
 - It tries `uv` first and falls back to `python -m venv + pip` when needed.
 
+On Windows without admin rights (no WSL2/Docker available), `just`/`uv`/the MSVC toolchain
+generally aren't options — see [`docs/windows.md`](windows.md) for a verified working no-admin
+setup (GNU-target Rust + plain `venv`/`pip`).
+
 No `just` fallback:
 ```bash
 # Create venv
@@ -266,4 +270,5 @@ When behavior changes, update:
 - `docs/pipeline.md` for stage behavior changes.
 - `docs/DESIGN.md` for architecture/boundary changes.
 - `docs/developers.md` for build/test/debug process changes.
+- `docs/windows.md` for Windows/no-admin setup changes.
 - `ai-state.md` for AI-oriented repo state.
