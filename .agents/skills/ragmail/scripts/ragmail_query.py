@@ -192,11 +192,20 @@ def _search_rows(
 ) -> list[dict]:
     if query:
         _ensure_fts_index(table, table_name)
-        search = table.search(query, query_type="fts").limit(limit)
+        # Same root issue as the no-query branch below: `.limit(N)` caps the FTS
+        # top-K retrieval BEFORE `.where()` narrows it, even with prefilter=True —
+        # in this lancedb version prefilter does not reorder that. If the top-N
+        # globally-ranked FTS matches don't happen to satisfy the filter (e.g. a
+        # --year filter when the highest-relevance hits are from other years),
+        # you silently get zero rows despite real matches existing. Retrieve a much
+        # larger candidate pool when a filter is present, then truncate after.
+        fts_limit = 20_000 if filters.where else limit
+        search = table.search(query, query_type="fts").limit(fts_limit)
         if filters.where:
             search = search.where(filters.where, prefilter=True)
         rows = search.to_list()
-        return _post_filter(rows, filters)
+        rows = _post_filter(rows, filters)
+        return rows[:limit] if filters.where else rows
     else:
         # No FTS query text: `.limit(N)` on a plain `.search()` caps the raw table
         # scan BEFORE `.where()` filters run, not after. Scan broadly first, apply
