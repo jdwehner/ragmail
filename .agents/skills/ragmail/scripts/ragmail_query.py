@@ -84,25 +84,25 @@ def _resolve_db_path(db: str | None, workspace: str | None) -> Path:
     raise SystemExit("Provide --workspace or --db (could not find default workspaces/2026)")
 
 
-def _ensure_fts_index(table, table_name: str) -> None:
+def _has_fts_index(table) -> bool:
+    """Best-effort, read-only check for an existing FTS index.
+
+    This deliberately never writes anything. `list_indices()` can fail to
+    recognize an existing on-disk FTS index (version/metadata mismatch across
+    lancedb releases) — that's a reporting gap, not proof the index is
+    missing, so an unrecognized index is treated as "maybe present" and the
+    actual search call is left to confirm it works.
+    """
     try:
         indices = table.list_indices()
     except Exception:
-        indices = []
-    has_fts = False
+        return False
     for idx in indices:
         name = str(getattr(idx, "name", ""))
         index_type = str(getattr(idx, "index_type", ""))
         if "fts" in (name + " " + index_type).lower():
-            has_fts = True
-            break
-    if not has_fts:
-        columns = (
-            FTS_COLUMNS_CHUNKS
-            if table_name == "email_chunks"
-            else FTS_COLUMNS_EMAILS
-        )
-        table.create_fts_index(list(columns), use_tantivy=True, replace=True)
+            return True
+    return False
 
 
 def _build_filters(args: argparse.Namespace) -> Filters:
@@ -191,7 +191,6 @@ def _search_rows(
     table, query: str | None, filters: Filters, limit: int, table_name: str
 ) -> list[dict]:
     if query:
-        _ensure_fts_index(table, table_name)
         # Same root issue as the no-query branch below: `.limit(N)` caps the FTS
         # top-K retrieval BEFORE `.where()` narrows it, even with prefilter=True —
         # in this lancedb version prefilter does not reorder that. If the top-N
@@ -200,10 +199,24 @@ def _search_rows(
         # you silently get zero rows despite real matches existing. Retrieve a much
         # larger candidate pool when a filter is present, then truncate after.
         fts_limit = 20_000 if filters.where else limit
-        search = table.search(query, query_type="fts").limit(fts_limit)
-        if filters.where:
-            search = search.where(filters.where, prefilter=True)
-        rows = search.to_list()
+        try:
+            search = table.search(query, query_type="fts").limit(fts_limit)
+            if filters.where:
+                search = search.where(filters.where, prefilter=True)
+            rows = search.to_list()
+        except Exception as exc:
+            # This skill queries an existing workspace read-only — it never
+            # creates or rebuilds indexes itself, even if `list_indices()`
+            # fails to report one (a known version/metadata quirk). If the
+            # FTS search genuinely can't run, surface that plainly instead of
+            # silently attempting a write into the workspace directory.
+            has_idx = _has_fts_index(table)
+            raise SystemExit(
+                f"FTS search on '{table_name}' failed ({exc}). "
+                f"list_indices() {'reports' if has_idx else 'does not report'} an FTS index. "
+                "This tool does not build/rebuild indexes — run the ragmail "
+                "pipeline's indexing step against the workspace to create one."
+            ) from exc
         rows = _post_filter(rows, filters)
         return rows[:limit] if filters.where else rows
     else:

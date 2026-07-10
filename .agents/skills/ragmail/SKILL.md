@@ -9,36 +9,45 @@ metadata:
 
 Use this skill when the user asks questions about email content in ragmail workspaces (who said what, counts by sender/date, topic summaries, costs mentioned, etc.). Default to running small Python scripts that query LanceDB directly; use the bundled CLI script only as a convenience or for quick reference.
 
+**This skill is read-only against the workspace.** Querying should never create, delete, or modify anything under `workspaces/<name>/` (including the LanceDB index files) or leave stray files anywhere in the repo (e.g. `__pycache__/`). All setup (venv) and all runtime state live in scratch/tmp locations outside the repo. If a query ever needs to write into the workspace to succeed (e.g. building a missing FTS index), that's a sign something is wrong — stop and surface it rather than writing; index/ingestion changes belong to the pipeline commands, not this skill.
+
 ## Quick start
 
 1. Identify the target workspace (e.g., `2026`) or the full LanceDB path.
-2. Ensure Python runs from the repo `.venv` (created with either `uv` or `python -m venv`).
+2. Ensure Python runs from the scratch query venv at `/tmp/ragmail_venv` (minimal deps only — see below).
 3. Prefer a short ad‑hoc Python script that connects to LanceDB and runs the query.
 4. If the question uses relative dates ("last summer", "yesterday"), convert to absolute dates before querying.
 
 ### Python environment (required)
 
-If `.venv` already exists, reuse it:
+Querying only needs `lancedb` (+ `pylance`, `pyarrow`, `tantivy` for FTS) — not the full pipeline stack in `python/pyproject.toml` (torch, transformers, sentence-transformers, spacy, openai, fastapi, pyinstaller, ...). Pulling the full project via `uv sync --project python` or `uv run --project python ...` downloads hundreds of MB and routinely times out in sandboxed shells. Use a small, dedicated venv for queries instead.
+
+**Never create this venv inside the repo/workspace folder.** If that folder is a synced or read-only-after-write mount (e.g. a Cowork connected folder), a half-finished venv write there can permanently break `uv venv` on that path (files can't be deleted or overwritten once written). Use a scratch location outside it, e.g. `/tmp/ragmail_venv`.
+
+Check for an existing venv first (reuse within a session):
 
 ```bash
-source .venv/bin/activate
-./.venv/bin/python -c "import lancedb; print('ok')"
+/tmp/ragmail_venv/bin/python -c "import lancedb; print('ok')" 2>/dev/null || echo "need setup"
 ```
 
-If `.venv` is missing, set it up with either:
+If missing, create it once with the minimal dependency set (seconds, not minutes):
 
 ```bash
-# Option A: uv-managed venv (recommended)
-uv venv
-source .venv/bin/activate
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv sync --project python
-
-# Option B: stdlib venv module
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e python
+uv venv /tmp/ragmail_venv
+UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/tmp/ragmail_venv uv pip install \
+  --python /tmp/ragmail_venv/bin/python \
+  lancedb==0.30.0 pylance pyarrow tantivy
 ```
+
+(Pin `lancedb` to the version pinned in `python/pyproject.toml` so the on-disk index format matches. `UV_LINK_MODE=copy` avoids slow cross-filesystem hardlink-fallback copies if the uv cache and `/tmp` are on different filesystems.)
+
+Then call the venv's interpreter **directly** — do not use `uv run --project python`, which re-resolves the full pipeline project (and its heavy deps) on every single invocation:
+
+```bash
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py query --workspace 2026 --query "Arkin teacher"
+```
+
+Only fall back to the full project env (`uv sync --project python` / `uv run --project python ...`) when you actually need pipeline features beyond querying — ingestion, embeddings, spacy NER, the FastAPI server, etc.
 
 ## Locate the database
 
@@ -71,11 +80,11 @@ For deeper body matches, use `email_chunks` and search `chunk_text`.
 
 ## Direct Python Queries (recommended)
 
-Use `UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python - <<'PY'` to run a short script inline. This enables more complex filtering and joins than the CLI wrapper.
+Use `/tmp/ragmail_venv/bin/python - <<'PY'` to run a short script inline. This enables more complex filtering and joins than the CLI wrapper.
 
 ### Example: FTS + filter + custom projection
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python - <<'PY'
+/tmp/ragmail_venv/bin/python - <<'PY'
 import lancedb
 
 db = lancedb.connect("workspaces/2026/db/email_search.lancedb")
@@ -95,7 +104,7 @@ PY
 
 ### Example: Pull full emails after chunk hits
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python - <<'PY'
+/tmp/ragmail_venv/bin/python - <<'PY'
 import lancedb
 
 db = lancedb.connect("workspaces/2026/db/email_search.lancedb")
@@ -125,7 +134,7 @@ PY
 
 ### Example: Aggregate counts by sender
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python - <<'PY'
+/tmp/ragmail_venv/bin/python - <<'PY'
 import lancedb
 from collections import Counter
 
@@ -150,7 +159,7 @@ PY
 Use this when you need fast counts, snippets, or amount extraction without writing a Python snippet.
 
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_query.py query --workspace 2026 --query "Arkin teacher"
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py query --workspace 2026 --query "Arkin teacher"
 ```
 
 ## Commands
@@ -158,13 +167,13 @@ UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/
 Run from repo root:
 
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_query.py query --workspace 2026 --query "Arkin teacher" --limit 50
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py query --workspace 2026 --query "Arkin teacher" --limit 50
 ```
 
 ### Query
 
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_query.py query \
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py query \
   --workspace 2026 \
   --query "Arkin teacher" \
   --limit 50 \
@@ -174,7 +183,7 @@ UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/
 ### Count
 
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_query.py count \
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py count \
   --workspace 2026 \
   --from-like "bob" \
   --year 2026 \
@@ -184,7 +193,7 @@ UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/
 ### Sum amounts (costs)
 
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_query.py sum \
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py sum \
   --workspace 2026 \
   --query "house painting" \
   --start 2025-06-01 \
@@ -211,7 +220,7 @@ Use a two-step flow: locate the matching chunk to get `email_id`, then fetch the
 
 1. Find the matching chunk and capture `email_id`:
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_query.py query \
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py query \
   --workspace 2026 \
   --table email_chunks \
   --query "Born 24 March 2010" \
@@ -221,7 +230,7 @@ UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/
 
 2. Fetch the full email by `email_id` (direct LanceDB query):
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python - <<'PY'
+/tmp/ragmail_venv/bin/python - <<'PY'
 import lancedb
 from pathlib import Path
 
@@ -241,7 +250,7 @@ PY
 
 Alternate: Use `ragmail_query.py` with `--email-id` to fetch the full body directly.
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_query.py query \
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_query.py query \
   --workspace 2026 \
   --email-id bf509cfe2e3ca574 \
   --limit 1 \
@@ -278,7 +287,7 @@ Preferred flow:
 
 ### Fast metadata check (no MBOX scan)
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python - <<'PY'
+/tmp/ragmail_venv/bin/python - <<'PY'
 import lancedb
 
 db = lancedb.connect("workspaces/2026/db/email_search.lancedb")
@@ -297,7 +306,7 @@ PY
 
 ### Extract an attachment by Message-ID (optimized)
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_attachments.py \
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_attachments.py \
   --workspace 2026 \
   --message-id "<abc123@example.com>" \
   --out-dir /tmp/attachments
@@ -305,7 +314,7 @@ UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/
 
 ### Extract by `email_id`
 ```bash
-UV_PROJECT_ENVIRONMENT=$PWD/.venv uv run --project python python .agents/skills/ragmail/scripts/ragmail_attachments.py \
+/tmp/ragmail_venv/bin/python -B .agents/skills/ragmail/scripts/ragmail_attachments.py \
   --workspace 2026 \
   --email-id bf509cfe2e3ca574 \
   --out-dir /tmp/attachments
