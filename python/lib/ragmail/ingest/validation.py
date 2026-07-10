@@ -207,14 +207,15 @@ class JsonEmailValidator:
                 if isinstance(body, str) and body.strip():
                     has_text = True
                     break
-                issues.append(
-                    ValidationIssue(
-                        code="content.body",
-                        field=f"content[{idx}].body",
-                        message="text block body must be non-empty",
-                        value=body,
+                if not has_attachments:
+                    issues.append(
+                        ValidationIssue(
+                            code="content.body",
+                            field=f"content[{idx}].body",
+                            message="text block body must be non-empty",
+                            value=body,
+                        )
                     )
-                )
             if not has_text and not has_attachments:
                 issues.append(
                     ValidationIssue(
